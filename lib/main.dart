@@ -1,128 +1,163 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:csv/csv.dart';
-import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 void main() {
-  WidgetsFlutterBinding.ensureInitialized();
-  runApp(MaterialApp(
-    theme: ThemeData.dark().copyWith(primaryColor: Colors.redAccent),
-    home: RdJScanner(),
-    debugShowCheckedModeBanner: false,
-  ));
+  runApp(const RdJScannerApp());
 }
 
-class RdJScanner extends StatefulWidget {
+class RdJScannerApp extends StatelessWidget {
+  const RdJScannerApp({super.key});
+
   @override
-  _RdJScannerState createState() => _RdJScannerState();
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'RdJ Scanner Pro',
+      theme: ThemeData(
+        brightness: Brightness.dark,
+        primarySwatch: Colors.orange,
+        textTheme: GoogleFonts.orbitronTextTheme(Theme.of(context).textTheme),
+      ),
+      home: const ScannerHomePage(),
+    );
+  }
 }
 
-class _RdJScannerState extends State<RdJScanner> {
-  BluetoothConnection? connection;
-  bool isConnecting = false;
-  bool isLogging = false;
-  String status = "Terputus";
-  
-  // Data Sensor Real-time
-  double rpm = 0, speed = 0, temp = 0, afr = 14.7;
-  List<List<dynamic>> logData = [["Waktu", "RPM", "Speed", "Suhu", "AFR"]];
+class ScannerHomePage extends StatefulWidget {
+  const ScannerHomePage({super.key});
+
+  @override
+  State<ScannerHomePage> createState() => _ScannerHomePageState();
+}
+
+class _ScannerHomePageState extends State<ScannerHomePage> {
+  List<ScanResult> scanResults = [];
+  bool isScanning = false;
+  BluetoothDevice? connectedDevice;
+  String afrValue = "0.0";
+  StreamSubscription? scanSubscription;
 
   @override
   void initState() {
     super.initState();
-    _initPermissions();
+    requestPermissions();
   }
 
-  void _initPermissions() async {
-    await [Permission.bluetoothScan, Permission.bluetoothConnect, Permission.location, Permission.storage].request();
-    WakelockPlus.enable();
+  // Minta Izin Bluetooth & Lokasi (Wajib untuk Android 12+)
+  void requestPermissions() async {
+    await [
+      Permission.bluetoothScan,
+      Permission.bluetoothConnect,
+      Permission.location,
+    ].request();
   }
 
-  // Koneksi & Handshake
-  void connectOBD() async {
-    setState(() => isConnecting = true);
+  void startScan() async {
+    setState(() {
+      scanResults.clear();
+      isScanning = true;
+    });
+
+    // Mulai scan
+    await FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
+
+    // Dapatkan hasil scan
+    FlutterBluePlus.scanResults.listen((results) {
+      if (mounted) {
+        setState(() {
+          scanResults = results;
+        });
+      }
+    });
+
+    await Future.delayed(const Duration(seconds: 10));
+    if (mounted) setState(() => isScanning = false);
+  }
+
+  void connectToDevice(BluetoothDevice device) async {
     try {
-      List<BluetoothDevice> devices = await FlutterBluetoothSerial.instance.getBondedDevices();
-      BluetoothDevice dev = devices.firstWhere((d) => d.name == "OBDII");
-
-      connection = await BluetoothConnection.toAddress(dev.address);
-      setState(() => status = "Setting Protocol...");
-
-      await _sendRaw("AT Z\r");    
-      await _sendRaw("AT E0\r");   
-      await _sendRaw("AT SP 0\r"); 
-      
-      setState(() { status = "RdJ Connected"; isConnecting = false; });
-      _listenData();
-      _startPolling();
+      await device.connect();
+      setState(() => connectedDevice = device);
+      // Simulasi pembacaan data AFR dari ELM327
+      startDataSimulation();
     } catch (e) {
-      setState(() { status = "Gagal: Periksa Bluetooth"; isConnecting = false; });
+      debugPrint("Koneksi gagal: $e");
     }
   }
 
-  // Mendengarkan Balasan dari Motor
-  void _listenData() {
-    connection!.input!.listen((Uint8List data) {
-      String response = utf8.decode(data);
-      _parseResponse(response);
-    }).onDone(() => setState(() => status = "Terputus"));
-  }
-
-  void _parseResponse(String res) {
-    if (res.contains("41 0C")) { // Respon RPM
-      List<String> parts = res.split(" ");
-      int a = int.parse(parts[2], radix: 16);
-      int b = int.parse(parts[3], radix: 16);
-      setState(() => rpm = ((a * 256) + b) / 4);
-    }
-    // Tambahkan parsing PID lain di sini sesuai rumus sebelumnya
-  }
-
-  void _startPolling() async {
-    while (connection != null && connection!.isConnected) {
-      connection!.output.add(Uint8List.fromList(utf8.encode("01 0C\r"))); // Request RPM
-      await Future.delayed(Duration(milliseconds: 200));
-      connection!.output.add(Uint8List.fromList(utf8.encode("01 0D\r"))); // Request Speed
-      await Future.delayed(Duration(milliseconds: 200));
-    }
-  }
-
-  Future<void> _sendRaw(String cmd) async {
-    connection!.output.add(Uint8List.fromList(utf8.encode(cmd)));
-    await connection!.output.allSent;
-    await Future.delayed(Duration(milliseconds: 500));
+  void startDataSimulation() {
+    // Di sini nanti tempat logika AT Commands OBD2
+    Timer.periodic(const Duration(milliseconds: 500), (timer) {
+      if (mounted) {
+        setState(() {
+          // Simulasi angka AFR bergerak antara 12.0 - 15.0
+          afrValue = (12 + (DateTime.now().millisecond / 333)).toStringAsFixed(1);
+        });
+      }
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(title: Text("RdJ SCANNER"), backgroundColor: Colors.red),
+      appBar: AppBar(
+        title: const Text('RdJ SCANNER PRO'),
+        centerTitle: true,
+        backgroundColor: Colors.black,
+      ),
       body: Column(
         children: [
-          _statusTile(),
-          Expanded(
-            child: GridView.count(
-              crossAxisCount: 2,
-              padding: EdgeInsets.all(10),
+          // Display AFR Utama
+          Container(
+            height: 200,
+            width: double.infinity,
+            margin: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.black,
+              border: Border.all(color: Colors.orange, width: 3),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _card("RPM", rpm.toStringAsFixed(0), "RPM", Colors.redAccent),
-                _card("AFR", afr.toStringAsFixed(1), "Ratio", afr > 15 ? Colors.red : Colors.green),
+                const Text("AIR FUEL RATIO", style: TextStyle(color: Colors.white, fontSize: 18)),
+                Text(
+                  afrValue,
+                  style: const TextStyle(color: Colors.orange, fontSize: 80, fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  connectedDevice == null ? "DISCONNECTED" : "CONNECTED: ${connectedDevice!.platformName}",
+                  style: TextStyle(color: connectedDevice == null ? Colors.red : Colors.green),
+                ),
               ],
             ),
           ),
-          ElevatedButton(onPressed: connectOBD, child: Text("HUBUNGKAN KE MOTOR"))
+          
+          ElevatedButton(
+            onPressed: isScanning ? null : startScan,
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            child: Text(isScanning ? "SCANNING..." : "SCAN DEVICE"),
+          ),
+
+          Expanded(
+            child: ListView.builder(
+              itemCount: scanResults.length,
+              itemBuilder: (context, index) {
+                final r = scanResults[index];
+                return ListTile(
+                  title: Text(r.device.platformName.isEmpty ? "Unknown Device" : r.device.platformName),
+                  subtitle: Text(r.device.remoteId.toString()),
+                  trailing: const Icon(Icons.bluetooth, color: Colors.blue),
+                  onTap: () => connectToDevice(r.device),
+                );
+              },
+            ),
+          ),
         ],
       ),
     );
   }
-
-  Widget _statusTile() => Container(color: Colors.white10, child: ListTile(title: Text(status, style: TextStyle(color: Colors.green))));
-  Widget _card(String t, String v, String u, Color c) => Card(color: Colors.white12, child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Text(t), Text(v, style: TextStyle(fontSize: 40, color: c)), Text(u)]));
 }
