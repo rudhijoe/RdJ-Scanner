@@ -1,19 +1,17 @@
 name: rdj_scanner
-description: Aplikasi Scanner OBD2 Motor Proyek RdJ
+description: "A new Flutter project."
+publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ">=3.0.0 <4.0.0"
+  sdk: '>=3.2.0 <4.0.0'
 
 dependencies:
   flutter:
     sdk: flutter
-  flutter_bluetooth_serial: ^0.4.0
-  permission_handler: ^11.3.1
-  path_provider: ^2.1.2
-  csv: ^6.0.0
-  wakelock_plus: ^1.1.4
-  google_fonts: ^6.1.0
+  flutter_blue_plus: ^1.31.0 # Library Bluetooth modern
+  permission_handler: ^11.0.0
+  google_fonts: ^6.0.0
 
 dev_dependencies:
   flutter_test:
