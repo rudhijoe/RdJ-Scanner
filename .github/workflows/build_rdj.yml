@@ -16,18 +16,18 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
-          java-version: '11' # Versi yang lebih stabil untuk Gradle lama
+          java-version: '17'
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
 
-      - name: Repair Android Folder & Get Pub
+      - name: Reconstruct Android Folder & Pub Get
         run: |
+          # Perintah ini akan membuat folder android yang hilang berdasarkan pubspec.yaml
+          flutter create . --platforms android
           flutter pub get
-          # Perintah di bawah ini memaksa pembaharuan struktur Gradle
-          cd android && ./gradlew clean && cd ..
 
       - name: Build APK Release
         run: flutter build apk --release --no-tree-shake-icons
