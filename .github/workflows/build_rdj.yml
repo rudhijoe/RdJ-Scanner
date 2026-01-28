@@ -1,1 +1,42 @@
+name: Build APK RdJ Pro
+on:
+  push:
+    branches:
+      - main  # Berjalan otomatis setiap kali Anda push ke branch main
+  workflow_dispatch: # Memungkinkan Anda menjalankan build secara manual
 
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Mengambil kode dari repository Anda
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      # 2. Menginstal Java (Penting untuk Android Build)
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      # 3. Menginstal Flutter SDK
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      # 4. Mendownload Library (pub get)
+      - name: Install Dependencies
+        run: flutter pub get
+
+      # 5. Build APK Release
+      - name: Build APK
+        run: flutter build apk --release
+
+      # 6. Menyimpan Hasil Build agar Bisa Didownload
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: RdJ-Scanner-Release
+          path: build/app/outputs/flutter-apk/app-release.apk
