@@ -16,18 +16,18 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
-          java-version: '11' # Kembali ke Java 11 untuk stabilitas Gradle lama
+          java-version: '17' # Kembali ke 17 sesuai permintaan sistem terbaru
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
 
-      - name: Fix Library Namespace & Pub Get
+      - name: Reconstruct & Fix Library
         run: |
           flutter create . --platforms android
           flutter pub get
-          # MAGIC FIX: Menyuntikkan namespace ke library bluetooth yang error
+          # Tetap gunakan Magic Fix untuk menyisipkan namespace ke library bluetooth
           sed -i 's/android {/android {\n    namespace "io.github.edufolly.flutter_bluetooth_serial"/' /home/runner/.pub-cache/hosted/pub.dev/flutter_bluetooth_serial-0.4.0/android/build.gradle
 
       - name: Build APK Release
