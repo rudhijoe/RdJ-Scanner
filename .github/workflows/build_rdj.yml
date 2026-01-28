@@ -23,22 +23,26 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Ultra Repair & Patch SDK 36
+      - name: Deep Clean & Force SDK Fix
         run: |
+          # Hapus sisa-sisa build yang gagal
+          rm -rf android
           flutter create . --platforms android
           flutter pub get
           
-          # 1. Fix Namespace & Manifest di library Bluetooth
+          # Patch Library Bluetooth secara mendalam
+          # Kita paksa library itu sendiri untuk menggunakan compileSdk 34
+          sed -i 's/compileSdkVersion .*/compileSdkVersion 34/' /home/runner/.pub-cache/hosted/pub.dev/flutter_bluetooth_serial-0.4.0/android/build.gradle
           sed -i 's/android {/android {\n    namespace "io.github.edufolly.flutter_bluetooth_serial"/' /home/runner/.pub-cache/hosted/pub.dev/flutter_bluetooth_serial-0.4.0/android/build.gradle
           sed -i 's/package="io.github.edufolly.flutterbluetoothserial"//g' /home/runner/.pub-cache/hosted/pub.dev/flutter_bluetooth_serial-0.4.0/android/src/main/AndroidManifest.xml
           
-          # 2. Paksa compileSdk ke 36 di app build.gradle.kts
-          sed -i 's/compileSdk = .*/compileSdk = 36/' android/app/build.gradle.kts
-          sed -i 's/targetSdk = .*/targetSdk = 36/' android/app/build.gradle.kts
+          # Samakan versi di project utama (KTS)
+          sed -i 's/compileSdk = .*/compileSdk = 34/' android/app/build.gradle.kts
+          sed -i 's/targetSdk = .*/targetSdk = 34/' android/app/build.gradle.kts
           
-          # 3. Patch lStar error secara global di level library
+          # Aktifkan AndroidX & Jetifier
+          echo "android.useAndroidX=true" > android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
-          echo "android.useAndroidX=true" >> android/gradle.properties
 
       - name: Build APK Release
         run: flutter build apk --release --no-tree-shake-icons
