@@ -1,8 +1,7 @@
 name: Build APK RdJ Pro
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -23,32 +22,17 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Deep Clean & Force SDK Fix
+      - name: Preparation & Build
         run: |
-          # Hapus sisa-sisa build yang gagal
-          rm -rf android
+          # 1. Pastikan folder android bersih & terupdate
           flutter create . --platforms android
           flutter pub get
           
-          # Patch Library Bluetooth secara mendalam
-          # Kita paksa library itu sendiri untuk menggunakan compileSdk 34
-          sed -i 's/compileSdkVersion .*/compileSdkVersion 34/' /home/runner/.pub-cache/hosted/pub.dev/flutter_bluetooth_serial-0.4.0/android/build.gradle
-          sed -i 's/android {/android {\n    namespace "io.github.edufolly.flutter_bluetooth_serial"/' /home/runner/.pub-cache/hosted/pub.dev/flutter_bluetooth_serial-0.4.0/android/build.gradle
-          sed -i 's/package="io.github.edufolly.flutterbluetoothserial"//g' /home/runner/.pub-cache/hosted/pub.dev/flutter_bluetooth_serial-0.4.0/android/src/main/AndroidManifest.xml
-          
-          # Samakan versi di project utama (KTS)
-          sed -i 's/compileSdk = .*/compileSdk = 34/' android/app/build.gradle.kts
-          sed -i 's/targetSdk = .*/targetSdk = 34/' android/app/build.gradle.kts
-          
-          # Aktifkan AndroidX & Jetifier
-          echo "android.useAndroidX=true" > android/gradle.properties
-          echo "android.enableJetifier=true" >> android/gradle.properties
-
-      - name: Build APK Release
-        run: flutter build apk --release --no-tree-shake-icons
+          # 2. Build APK (SDK 34 secara default di Flutter terbaru)
+          flutter build apk --release --no-tree-shake-icons
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RdJ-Scanner-Release
+          name: RdJ-Scanner-Final
           path: build/app/outputs/flutter-apk/app-release.apk
