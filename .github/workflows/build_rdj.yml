@@ -16,18 +16,19 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
-          java-version: '17'
+          java-version: '11' # Kembali ke Java 11 untuk stabilitas Gradle lama
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
 
-      - name: Reconstruct Android Folder & Pub Get
+      - name: Fix Library Namespace & Pub Get
         run: |
-          # Perintah ini akan membuat folder android yang hilang berdasarkan pubspec.yaml
           flutter create . --platforms android
           flutter pub get
+          # MAGIC FIX: Menyuntikkan namespace ke library bluetooth yang error
+          sed -i 's/android {/android {\n    namespace "io.github.edufolly.flutter_bluetooth_serial"/' /home/runner/.pub-cache/hosted/pub.dev/flutter_bluetooth_serial-0.4.0/android/build.gradle
 
       - name: Build APK Release
         run: flutter build apk --release --no-tree-shake-icons
