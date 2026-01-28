@@ -28,13 +28,14 @@ jobs:
           flutter create . --platforms android
           flutter pub get
           
-          # 1. Fix Namespace & Manifest di library Bluetooth
+          # 1. Fix Namespace & Manifest di library Bluetooth (Library eksternal biasanya masih pakai format lama)
           sed -i 's/android {/android {\n    namespace "io.github.edufolly.flutter_bluetooth_serial"/' /home/runner/.pub-cache/hosted/pub.dev/flutter_bluetooth_serial-0.4.0/android/build.gradle
           sed -i 's/package="io.github.edufolly.flutterbluetoothserial"//g' /home/runner/.pub-cache/hosted/pub.dev/flutter_bluetooth_serial-0.4.0/android/src/main/AndroidManifest.xml
           
-          # 2. Force Upgrade SDK Version agar lStar ditemukan
-          sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 34/g' android/app/build.gradle
-          sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 34/g' android/app/build.gradle
+          # 2. Force Upgrade SDK Version di file .kts (Format baru)
+          # Kita gunakan perintah yang lebih fleksibel untuk mencari compileSdk dan targetSdk
+          sed -i 's/compileSdk = .*/compileSdk = 34/' android/app/build.gradle.kts
+          sed -i 's/targetSdk = .*/targetSdk = 34/' android/app/build.gradle.kts
 
       - name: Build APK Release
         run: flutter build apk --release --no-tree-shake-icons
