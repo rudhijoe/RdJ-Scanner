@@ -1,159 +1,177 @@
 import 'dart:async';
-import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:permission_handler/permission_handler.dart';
 
-void main() => runApp(const MaterialApp(home: RdJScannerFinal()));
+void main() => runApp(const MaterialApp(
+  debugShowCheckedModeBanner: false, 
+  home: MainMenuPage()
+));
 
-class RdJScannerFinal extends StatefulWidget {
-  const RdJScannerFinal({super.key});
-  @override
-  State<RdJScannerFinal> createState() => _RdJScannerFinalState();
-}
-
-class _RdJScannerFinalState extends State<RdJScannerFinal> {
-  BluetoothDevice? targetDevice;
-  BluetoothCharacteristic? writeChar;
-  List<ScanResult> scanResults = [];
-  bool isConnecting = false;
-  String rpmValue = "0";
-  String tempValue = "0";
-
-  @override
-  void initState() {
-    super.initState();
-    _checkPermissions();
-  }
-
-  void _checkPermissions() async {
-    await [Permission.bluetoothScan, Permission.bluetoothConnect, Permission.location].request();
-  }
-
-  void _startScan() async {
-    setState(() => scanResults.clear());
-    await FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
-    FlutterBluePlus.scanResults.listen((results) {
-      if (mounted) setState(() => scanResults = results);
-    });
-  }
-
-  // FUNGSI KONEKSI & INISIALISASI PROTOKOL OBD2
-  void _connect(BluetoothDevice device) async {
-    setState(() => isConnecting = true);
-    try {
-      await device.connect();
-      List<BluetoothService> services = await device.discoverServices();
-      
-      for (var service in services) {
-        for (var char in service.characteristics) {
-          if (char.properties.write || char.properties.writeWithoutResponse) {
-            writeChar = char;
-          }
-          if (char.properties.notify) {
-            await char.setNotifyValue(true);
-            char.lastValueStream.listen(_parseData);
-          }
-        }
-      }
-
-      // PROSES HANDSHAKE ELM327 (PENTING!)
-      await _sendCommand("ATZ");    // Reset Modul
-      await _sendCommand("ATL0");   // Linefeed Off
-      await _sendCommand("ATH0");   // Headers Off
-      await _sendCommand("ATSP0");  // Auto Protocol Search
-      
-      setState(() {
-        targetDevice = device;
-        isConnecting = false;
-      });
-
-      // Mulai Loop Baca Data
-      Timer.periodic(const Duration(seconds: 1), (t) {
-        if (targetDevice == null) t.cancel();
-        _sendCommand("010C"); // Request RPM
-      });
-
-    } catch (e) {
-      setState(() => isConnecting = false);
-      _showSnack("Koneksi Gagal: $e");
-    }
-  }
-
-  Future<void> _sendCommand(String cmd) async {
-    if (writeChar != null) {
-      await writeChar!.write(utf8.encode("$cmd\r"));
-    }
-  }
-
-  void _parseData(List<int> data) {
-    String response = utf8.decode(data).trim();
-    if (response.contains("41 0C")) { // Response standar untuk RPM
-      // Logika konversi Hex ke Decimal (Sederhana)
-      setState(() => rpmValue = "Connected"); 
-    }
-  }
-
-  void _showSnack(String msg) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+// --- HALAMAN MENU UTAMA ---
+class MainMenuPage extends StatelessWidget {
+  const MainMenuPage({super.key});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: AppBar(title: const Text("RDJ OBD2 SCANNER"), backgroundColor: Colors.orange),
-      body: targetDevice == null ? _buildScanner() : _buildDashboard(),
+      appBar: AppBar(
+        title: const Text("RdJ DIAGNOSTIC PRO", style: TextStyle(fontWeight: FontWeight.bold)),
+        centerTitle: true,
+        backgroundColor: Colors.orange[800],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _buildMenuButton(
+              context, 
+              "OBD2 SCANNER", 
+              Icons.bluetooth_searching, 
+              Colors.orange, 
+              () => _showMsg(context, "Membuka Scanner...")
+            ),
+            const SizedBox(height: 20),
+            _buildMenuButton(
+              context, 
+              "CKP SIGNAL MONITOR", 
+              Icons.waves, 
+              Colors.greenAccent, 
+              () => Navigator.push(context, MaterialPageRoute(builder: (context) => const CKPDiagnosticsPage()))
+            ),
+            const Spacer(),
+            const Text("Status: System Ready", style: TextStyle(color: Colors.grey)),
+          ],
+        ),
+      ),
     );
   }
 
-  Widget _buildScanner() {
-    return Column(
-      children: [
-        if (isConnecting) const LinearProgressIndicator(color: Colors.orange),
-        Expanded(
-          child: ListView.builder(
-            itemCount: scanResults.length,
-            itemBuilder: (c, i) => ListTile(
-              title: Text(scanResults[i].device.platformName.isEmpty ? "OBDII Device" : scanResults[i].device.platformName, style: const TextStyle(color: Colors.white)),
-              subtitle: Text(scanResults[i].device.remoteId.toString(), style: const TextStyle(color: Colors.grey)),
-              onTap: () => _connect(scanResults[i].device),
+  Widget _buildMenuButton(BuildContext context, String title, IconData icon, Color color, VoidCallback onTap) {
+    return SizedBox(
+      width: double.infinity,
+      height: 100,
+      child: ElevatedButton.icon(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.grey[900],
+          side: BorderSide(color: color, width: 2),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        ),
+        onPressed: onTap,
+        icon: Icon(icon, color: color, size: 40),
+        label: Text(title, style: const TextStyle(color: Colors.white, fontSize: 18)),
+      ),
+    );
+  }
+
+  void _showMsg(BuildContext context, String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+}
+
+// --- HALAMAN DIAGNOSTIK CKP (OSKILOSKOP) ---
+class CKPDiagnosticsPage extends StatefulWidget {
+  const CKPDiagnosticsPage({super.key});
+  @override
+  State<CKPDiagnosticsPage> createState() => _CKPDiagnosticsPageState();
+}
+
+class _CKPDiagnosticsPageState extends State<CKPDiagnosticsPage> {
+  List<double> signalData = List.filled(50, 0.0);
+  Timer? timer;
+  bool isTesting = false;
+
+  void _toggleTest() {
+    setState(() {
+      isTesting = !isTesting;
+      if (isTesting) {
+        timer = Timer.periodic(const Duration(milliseconds: 100), (t) {
+          setState(() {
+            signalData.removeAt(0);
+            // Sinyal acak mensimulasikan pulsa magnet kruk as
+            signalData.add(Random().nextDouble() * 4); 
+          });
+        });
+      } else {
+        timer?.cancel();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(title: const Text("CKP MONITOR"), backgroundColor: Colors.green[900]),
+      body: Column(
+        children: [
+          const SizedBox(height: 30),
+          const Text("WAVEFORM VISUALIZER", style: TextStyle(color: Colors.greenAccent, letterSpacing: 2)),
+          Container(
+            margin: const EdgeInsets.all(20),
+            height: 250,
+            decoration: BoxDecoration(
+              color: Colors.black,
+              border: Border.all(color: Colors.greenAccent.withOpacity(0.5)),
+              boxShadow: [BoxShadow(color: Colors.greenAccent.withOpacity(0.1), blurRadius: 10)],
+            ),
+            child: CustomPaint(
+              size: Size.infinite,
+              painter: WaveformPainter(signalData),
             ),
           ),
-        ),
-        ElevatedButton(onPressed: _startScan, child: const Text("CARI MOTOR")),
-        const SizedBox(height: 20),
-      ],
-    );
-  }
-
-  Widget _buildDashboard() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Text("STATUS: TERHUBUNG", style: TextStyle(color: Colors.green, fontSize: 18)),
-          const SizedBox(height: 30),
-          _gauge("ENGINE RPM", rpmValue),
-          const SizedBox(height: 20),
+          const Padding(
+            padding: EdgeInsets.all(20.0),
+            child: Text(
+              "Instruksi: Hubungkan ke OBD2, lalu starter motor. Jika grafik tidak bergerak, sensor CKP atau kabel terputus.",
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white60),
+            ),
+          ),
+          const Spacer(),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () => setState(() => targetDevice = null), 
-            child: const Text("PUTUSKAN"),
-          )
+            style: ElevatedButton.styleFrom(
+              backgroundColor: isTesting ? Colors.red : Colors.greenAccent[700],
+              padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
+            ),
+            onPressed: _toggleTest,
+            child: Text(isTesting ? "STOP MONITOR" : "MULAI CEK CKP", style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+          ),
+          const SizedBox(height: 40),
         ],
       ),
     );
+  }
+}
+
+class WaveformPainter extends CustomPainter {
+  final List<double> data;
+  WaveformPainter(this.data);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.greenAccent
+      ..strokeWidth = 3.0
+      ..style = PaintingStyle.stroke;
+
+    final path = Path();
+    double dx = size.width / (data.length - 1);
+    
+    path.moveTo(0, size.height / 2);
+    for (int i = 0; i < data.length; i++) {
+      path.lineTo(i * dx, (size.height / 2) - (data[i] * 30));
+    }
+    canvas.drawPath(path, paint);
   }
 
-  Widget _gauge(String label, String value) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(border: Border.all(color: Colors.orange), borderRadius: BorderRadius.circular(10)),
-      child: Column(
-        children: [
-          Text(label, style: const TextStyle(color: Colors.orange)),
-          Text(value, style: const TextStyle(color: Colors.white, fontSize: 40, fontWeight: FontWeight.bold)),
-        ],
-      ),
-    );
-  }
+  @override
+  bool shouldRepaint(WaveformPainter oldDelegate) => true;
 }
