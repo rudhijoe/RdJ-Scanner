@@ -2,106 +2,41 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 
-void main() => runApp(const MaterialApp(
-  debugShowCheckedModeBanner: false, 
-  home: MainMenuPage()
-));
-
-// --- HALAMAN MENU UTAMA ---
-class MainMenuPage extends StatelessWidget {
-  const MainMenuPage({super.key});
+class ResetAdvancedPage extends StatefulWidget {
+  const ResetAdvancedPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        title: const Text("RdJ DIAGNOSTIC PRO", style: TextStyle(fontWeight: FontWeight.bold)),
-        centerTitle: true,
-        backgroundColor: Colors.orange[800],
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            _buildMenuButton(
-              context, 
-              "OBD2 SCANNER", 
-              Icons.bluetooth_searching, 
-              Colors.orange, 
-              () => _showMsg(context, "Membuka Scanner...")
-            ),
-            const SizedBox(height: 20),
-            _buildMenuButton(
-              context, 
-              "CKP SIGNAL MONITOR", 
-              Icons.waves, 
-              Colors.greenAccent, 
-              () => Navigator.push(context, MaterialPageRoute(builder: (context) => const CKPDiagnosticsPage()))
-            ),
-            const Spacer(),
-            const Text("Status: System Ready", style: TextStyle(color: Colors.grey)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMenuButton(BuildContext context, String title, IconData icon, Color color, VoidCallback onTap) {
-    return SizedBox(
-      width: double.infinity,
-      height: 100,
-      child: ElevatedButton.icon(
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.grey[900],
-          side: BorderSide(color: color, width: 2),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-        ),
-        onPressed: onTap,
-        icon: Icon(icon, color: color, size: 40),
-        label: Text(title, style: const TextStyle(color: Colors.white, fontSize: 18)),
-      ),
-    );
-  }
-
-  void _showMsg(BuildContext context, String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-  }
+  State<ResetAdvancedPage> createState() => _ResetAdvancedPageState();
 }
 
-// --- HALAMAN DIAGNOSTIK CKP (OSKILOSKOP) ---
-class CKPDiagnosticsPage extends StatefulWidget {
-  const CKPDiagnosticsPage({super.key});
-  @override
-  State<CKPDiagnosticsPage> createState() => _CKPDiagnosticsPageState();
-}
+class _ResetAdvancedPageState extends State<ResetAdvancedPage> {
+  List<double> afrData = List.filled(40, 14.7);
+  Timer? _timer;
+  bool isMonitoring = false;
+  String statusAction = "Sistem Standby - Siap Melakukan Reset";
 
-class _CKPDiagnosticsPageState extends State<CKPDiagnosticsPage> {
-  List<double> signalData = List.filled(50, 0.0);
-  Timer? timer;
-  bool isTesting = false;
+  // Simulasi Monitoring AFR & O2 Sensor
+  void _startMonitoring() {
+    _timer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
+      setState(() {
+        afrData.removeAt(0);
+        afrData.add(13.5 + Random().nextDouble() * 2);
+      });
+    });
+  }
 
-  void _toggleTest() {
-    setState(() {
-      isTesting = !isTesting;
-      if (isTesting) {
-        timer = Timer.periodic(const Duration(milliseconds: 100), (t) {
-          setState(() {
-            signalData.removeAt(0);
-            // Sinyal acak mensimulasikan pulsa magnet kruk as
-            signalData.add(Random().nextDouble() * 4); 
-          });
-        });
-      } else {
-        timer?.cancel();
-      }
+  // Fungsi Kirim Perintah (Placeholder untuk koneksi Bluetooth Anda)
+  void _sendCommand(String command, String successMsg) {
+    setState(() => statusAction = "Mengirim Perintah $command...");
+    // Di sini nanti kita panggil fungsi bluetooth.write(command)
+    Future.delayed(const Duration(seconds: 2), () {
+      setState(() => statusAction = successMsg);
     });
   }
 
   @override
   void dispose() {
-    timer?.cancel();
+    _timer?.cancel();
     super.dispose();
   }
 
@@ -109,69 +44,146 @@ class _CKPDiagnosticsPageState extends State<CKPDiagnosticsPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: AppBar(title: const Text("CKP MONITOR"), backgroundColor: Colors.green[900]),
-      body: Column(
-        children: [
-          const SizedBox(height: 30),
-          const Text("WAVEFORM VISUALIZER", style: TextStyle(color: Colors.greenAccent, letterSpacing: 2)),
-          Container(
-            margin: const EdgeInsets.all(20),
-            height: 250,
-            decoration: BoxDecoration(
-              color: Colors.black,
-              border: Border.all(color: Colors.greenAccent.withOpacity(0.5)),
-              boxShadow: [BoxShadow(color: Colors.greenAccent.withOpacity(0.1), blurRadius: 10)],
+      appBar: AppBar(
+        title: const Text("RESET & MAINTENANCE"),
+        backgroundColor: Colors.red[900],
+      ),
+      body: SingleChildScrollView(
+        child: Column(
+          children: [
+            const SizedBox(height: 20),
+            
+            // PANEL GRAFIK AFR
+            _buildSectionTitle("LIVE AIR-FUEL RATIO (AFR)"),
+            Container(
+              margin: const EdgeInsets.all(15),
+              height: 150,
+              decoration: BoxDecoration(
+                color: Colors.black,
+                border: Border.all(color: Colors.redAccent.withOpacity(0.5)),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: CustomPaint(
+                painter: ChartPainter(afrData, Colors.redAccent),
+                child: Container(),
+              ),
             ),
-            child: CustomPaint(
-              size: Size.infinite,
-              painter: WaveformPainter(signalData),
+            
+            // STATUS BOX (DINAMIS)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              margin: const EdgeInsets.symmetric(horizontal: 15),
+              decoration: BoxDecoration(
+                color: Colors.blueGrey[900],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.white10)
+              ),
+              child: Text(statusAction, 
+                style: const TextStyle(color: Colors.yellowAccent, fontSize: 13, fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+              ),
             ),
-          ),
-          const Padding(
-            padding: EdgeInsets.all(20.0),
-            child: Text(
-              "Instruksi: Hubungkan ke OBD2, lalu starter motor. Jika grafik tidak bergerak, sensor CKP atau kabel terputus.",
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white60),
+
+            const SizedBox(height: 20),
+
+            // TOMBOL RESET TPS
+            _buildActionCard(
+              title: "RESET TPS",
+              desc: "Kalibrasi ulang posisi nol katup gas",
+              icon: Icons.settings_input_component,
+              color: Colors.orange,
+              onTap: () => _sendCommand("01 11 RESET", "Berhasil: TPS Kalibrasi ke 0%"),
             ),
-          ),
-          const Spacer(),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: isTesting ? Colors.red : Colors.greenAccent[700],
-              padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
+
+            // TOMBOL RESET AFR
+            _buildActionCard(
+              title: "RESET AFR / FUEL TRIM",
+              desc: "Hapus memori adaptasi bahan bakar",
+              icon: Icons.ev_station,
+              color: Colors.greenAccent,
+              onTap: () => _sendCommand("01 03 CLEAR", "Berhasil: Memory AFR dikosongkan"),
             ),
-            onPressed: _toggleTest,
-            child: Text(isTesting ? "STOP MONITOR" : "MULAI CEK CKP", style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-          ),
-          const SizedBox(height: 40),
-        ],
+
+            // TOMBOL CLEAR DTC (FITUR BARU)
+            _buildActionCard(
+              title: "HAPUS KODE DTC (CLEAR)",
+              desc: "Mematikan lampu Check Engine (MIL)",
+              icon: Icons.delete_forever,
+              color: Colors.redAccent,
+              onTap: () => _sendCommand("04", "Berhasil: Semua Kode Error Dihapus"),
+            ),
+
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: () {
+                setState(() => isMonitoring = !isMonitoring);
+                isMonitoring ? _startMonitoring() : _timer?.cancel();
+              },
+              icon: Icon(isMonitoring ? Icons.stop : Icons.play_arrow),
+              label: Text(isMonitoring ? "STOP GRAPH" : "START GRAPH"),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey),
+            ),
+            const SizedBox(height: 30),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionTitle(String title) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 15),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(title, style: const TextStyle(color: Colors.white54, fontSize: 12, letterSpacing: 1.5)),
+      ),
+    );
+  }
+
+  Widget _buildActionCard({required String title, required String desc, required IconData icon, required Color color, required VoidCallback onTap}) {
+    return Card(
+      color: Colors.white.withOpacity(0.05),
+      margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 6),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        leading: CircleAvatar(
+          backgroundColor: color.withOpacity(0.2),
+          child: Icon(icon, color: color),
+        ),
+        title: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        subtitle: Text(desc, style: const TextStyle(color: Colors.white38, fontSize: 11)),
+        trailing: const Icon(Icons.touch_app, color: Colors.white24),
+        onTap: onTap,
       ),
     );
   }
 }
 
-class WaveformPainter extends CustomPainter {
+// Grafik Painter
+class ChartPainter extends CustomPainter {
   final List<double> data;
-  WaveformPainter(this.data);
+  final Color color;
+  ChartPainter(this.data, this.color);
 
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = Colors.greenAccent
-      ..strokeWidth = 3.0
+      ..color = color
+      ..strokeWidth = 2.5
       ..style = PaintingStyle.stroke;
-
+    
     final path = Path();
     double dx = size.width / (data.length - 1);
     
-    path.moveTo(0, size.height / 2);
+    path.moveTo(0, size.height - (data[0] * 5)); 
     for (int i = 0; i < data.length; i++) {
-      path.lineTo(i * dx, (size.height / 2) - (data[i] * 30));
+      path.lineTo(i * dx, size.height - (data[i] * 5));
     }
     canvas.drawPath(path, paint);
   }
 
   @override
-  bool shouldRepaint(WaveformPainter oldDelegate) => true;
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
