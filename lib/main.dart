@@ -4,13 +4,10 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-void main() {
-  runApp(const RdJScannerApp());
-}
+void main() => runApp(const RdJScannerApp());
 
 class RdJScannerApp extends StatelessWidget {
   const RdJScannerApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -21,179 +18,232 @@ class RdJScannerApp extends StatelessWidget {
         scaffoldBackgroundColor: Colors.black,
         textTheme: GoogleFonts.orbitronTextTheme(Theme.of(context).textTheme),
       ),
-      home: const PermissionCheckPage(),
+      home: const MainScannerPage(),
     );
   }
 }
 
-// --- HALAMAN IZIN ---
-class PermissionCheckPage extends StatefulWidget {
-  const PermissionCheckPage({super.key});
+class MainScannerPage extends StatefulWidget {
+  const MainScannerPage({super.key});
   @override
-  State<PermissionCheckPage> createState() => _PermissionCheckPageState();
+  State<MainScannerPage> createState() => _MainScannerPageState();
 }
 
-class _PermissionCheckPageState extends State<PermissionCheckPage> {
+class _MainScannerPageState extends State<MainScannerPage> {
+  BluetoothDevice? connectedDevice;
+  List<ScanResult> scanResults = [];
+  bool isScanning = false;
+  
+  // Data Sensor
+  Map<String, String> sensors = {
+    "AFR": "14.7", "RPM": "0", "INJ": "0.00", 
+    "IGN": "0.0", "MAP": "101.3", "CASE": "101.1"
+  };
+
   @override
   void initState() {
     super.initState();
-    checkPermissions();
+    _initSystem();
   }
 
-  void checkPermissions() async {
+  // 1. FUNGSI IZIN & NYALAKAN BLUETOOTH OTOMATIS
+  Future<void> _initSystem() async {
+    // Minta Izin
     await [
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
-      Permission.location
+      Permission.location,
     ].request();
-    if (mounted) {
-      Navigator.pushReplacement(
-        context, MaterialPageRoute(builder: (context) => const ScannerHomePage()));
+
+    // Cek & Minta Nyalakan Bluetooth
+    if (await FlutterBluePlus.adapterState.first != BluetoothAdapterState.on) {
+      try {
+        await FlutterBluePlus.turnOn();
+      } catch (e) {
+        debugPrint("Sistem tidak mendukung auto-on: $e");
+      }
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return const Scaffold(
-      body: Center(child: CircularProgressIndicator(color: Colors.orange)),
-    );
-  }
-}
+  // 2. FUNGSI SCAN PERANGKAT
+  void startScan() async {
+    // Cek GPS sebelum scan (Wajib untuk Android 7-11)
+    if (await Permission.location.serviceStatus.isDisabled) {
+      _showSimpleSnackBar("Harap Aktifkan GPS/Lokasi Anda!");
+      await openAppSettings();
+      return;
+    }
 
-// --- DASHBOARD UTAMA ---
-class ScannerHomePage extends StatefulWidget {
-  const ScannerHomePage({super.key});
-  @override
-  State<ScannerHomePage> createState() => _ScannerHomePageState();
-}
-
-class _ScannerHomePageState extends State<ScannerHomePage> {
-  final StreamController<Map<String, String>> _dataStreamController = StreamController.broadcast();
-  bool isConnected = false;
-  
-  Map<String, String> sensors = {
-    "AFR": "14.7",
-    "INJECTOR": "2.20",
-    "IGNITION": "10.0",
-    "MAP (TB)": "30.0",
-    "CKP (RPM)": "1500",
-    "CRANKCASE": "101.3",
-  };
-
-  void startStreaming() {
-    Timer.periodic(const Duration(milliseconds: 150), (timer) {
-      if (mounted && isConnected) {
-        setState(() {
-          sensors["AFR"] = (13.5 + (DateTime.now().millisecond / 500)).toStringAsFixed(1);
-          sensors["CKP (RPM)"] = (1450 + (DateTime.now().millisecond % 200)).toString();
-          sensors["INJECTOR"] = (2.10 + (DateTime.now().millisecond / 2000)).toStringAsFixed(2);
-          sensors["IGNITION"] = (8.0 + (DateTime.now().millisecond / 100)).toStringAsFixed(1);
-          sensors["MAP (TB)"] = (28.5 + (DateTime.now().millisecond / 1000)).toStringAsFixed(1);
-          sensors["CRANKCASE"] = (101.0 + (DateTime.now().millisecond / 2000)).toStringAsFixed(1);
-        });
-        _dataStreamController.add(sensors);
-      }
-    });
+    setState(() { scanResults.clear(); isScanning = true; });
+    
+    try {
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
+      FlutterBluePlus.scanResults.listen((results) {
+        if (mounted) setState(() { scanResults = results; });
+      });
+      await Future.delayed(const Duration(seconds: 5));
+    } finally {
+      if (mounted) setState(() { isScanning = false; });
+    }
   }
 
-  void clearDTC() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.grey[900],
-        title: const Text("HAPUS DTC / RESET ECU?"),
-        content: const Text("Pastikan mesin OFF & Kontak ON."),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text("BATAL")),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () {
-              Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text("DTC Berhasil Dihapus!"))
-              );
-            },
-            child: const Text("RESET NOW"),
-          ),
-        ],
-      ),
-    );
+  // 3. FUNGSI KONEKSI & STREAM DATA
+  void connectToDevice(BluetoothDevice device) async {
+    _showSimpleSnackBar("Menghubungkan ke ${device.platformName}...");
+    try {
+      await device.connect(timeout: const Duration(seconds: 10));
+      setState(() { connectedDevice = device; });
+      
+      // Jalankan Stream Data Simulasi (Nanti bisa diganti biner OBD2)
+      Timer.periodic(const Duration(milliseconds: 150), (timer) {
+        if (mounted && connectedDevice != null) {
+          setState(() {
+            sensors["AFR"] = (13.5 + (DateTime.now().millisecond / 500)).toStringAsFixed(1);
+            sensors["RPM"] = (1450 + (DateTime.now().millisecond % 150)).toString();
+            sensors["INJ"] = (2.15 + (DateTime.now().millisecond / 2500)).toStringAsFixed(2);
+            sensors["IGN"] = (9.5 + (DateTime.now().millisecond / 120)).toStringAsFixed(1);
+          });
+        } else {
+          timer.cancel();
+        }
+      });
+    } catch (e) {
+      _showSimpleSnackBar("Gagal Terhubung: $e");
+    }
+  }
+
+  void _showSimpleSnackBar(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("RdJ PRO SCANNER"),
+        title: const Text("RdJ SCANNER PRO", style: TextStyle(letterSpacing: 2)),
+        centerTitle: true,
         backgroundColor: Colors.black,
         actions: [
-          IconButton(icon: const Icon(Icons.delete_forever, color: Colors.red), onPressed: clearDTC)
+          if (connectedDevice != null)
+            IconButton(
+              icon: const Icon(Icons.delete_sweep, color: Colors.red),
+              onPressed: () => _showClearDTCDialog(),
+            )
         ],
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: StreamBuilder<Map<String, String>>(
-              stream: _dataStreamController.stream,
-              builder: (context, snapshot) {
-                var data = snapshot.data ?? sensors;
-                return GridView.count(
-                  padding: const EdgeInsets.all(10),
-                  crossAxisCount: 2,
-                  childAspectRatio: 1.2,
-                  mainAxisSpacing: 10,
-                  crossAxisSpacing: 10,
-                  children: [
-                    _sensorTile("AIR FUEL", data["AFR"]!, "AFR", Colors.orange),
-                    _sensorTile("CKP SENSOR", data["CKP (RPM)"]!, "RPM", Colors.purpleAccent),
-                    _sensorTile("INJECTOR", data["INJECTOR"]!, "ms", Colors.blueAccent),
-                    _sensorTile("IGNITION", data["IGNITION"]!, "°", Colors.greenAccent),
-                    _sensorTile("THROTTLE PRESS", data["MAP (TB)"]!, "kPa", Colors.redAccent),
-                    _sensorTile("CRANKCASE", data["CRANKCASE"]!, "kPa", Colors.yellowAccent),
-                  ],
-                );
-              },
-            ),
-          ),
-          _buildConnectButton(),
-        ],
-      ),
+      body: connectedDevice == null ? _buildDevicePicker() : _buildDashboard(),
     );
   }
 
-  Widget _sensorTile(String label, String value, String unit, Color color) {
+  // WIDGET: PEMILIH BLUETOOTH
+  Widget _buildDevicePicker() {
+    return Column(
+      children: [
+        const SizedBox(height: 20),
+        const Text("PILIH MODUL ECU", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
+        const Divider(color: Colors.orange),
+        if (isScanning) const LinearProgressIndicator(color: Colors.orange),
+        Expanded(
+          child: ListView.builder(
+            itemCount: scanResults.length,
+            itemBuilder: (c, i) {
+              final d = scanResults[i].device;
+              final name = d.platformName.isEmpty ? "Unknown Device" : d.platformName;
+              return Card(
+                color: const Color(0xFF1A1A1A),
+                margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
+                child: ListTile(
+                  leading: const Icon(Icons.bluetooth_audio, color: Colors.blue),
+                  title: Text(name),
+                  subtitle: Text(d.remoteId.toString(), style: const TextStyle(fontSize: 10)),
+                  onTap: () => connectToDevice(d),
+                ),
+              );
+            },
+          ),
+        ),
+        _actionButton("SCAN PERANGKAT", startScan, Colors.orange),
+      ],
+    );
+  }
+
+  // WIDGET: DASHBOARD UTAMA
+  Widget _buildDashboard() {
+    return Column(
+      children: [
+        Expanded(
+          child: GridView.count(
+            padding: const EdgeInsets.all(12),
+            crossAxisCount: 2,
+            childAspectRatio: 1.2,
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 10,
+            children: [
+              _sensorCard("AIR FUEL", sensors["AFR"]!, "AFR", Colors.orange),
+              _sensorCard("CKP SENSOR", sensors["RPM"]!, "RPM", Colors.purpleAccent),
+              _sensorCard("INJECTOR", sensors["INJ"]!, "ms", Colors.blueAccent),
+              _sensorCard("IGNITION", sensors["IGN"]!, "° BTDC", Colors.greenAccent),
+              _sensorCard("THROTTLE", sensors["MAP"]!, "kPa", Colors.redAccent),
+              _sensorCard("CRANKCASE", sensors["CASE"]!, "kPa", Colors.yellowAccent),
+            ],
+          ),
+        ),
+        _actionButton("DISCONNECT", () => setState(() => connectedDevice = null), Colors.red),
+      ],
+    );
+  }
+
+  Widget _sensorCard(String title, String val, String unit, Color col) {
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF1A1A1A),
+        color: const Color(0xFF111111),
         borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: col.withOpacity(0.4)),
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Text(label, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold)),
+          Text(title, style: TextStyle(color: col, fontSize: 10, fontWeight: FontWeight.bold)),
           const SizedBox(height: 5),
-          Text(value, style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold)),
+          Text(val, style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white)),
           Text(unit, style: const TextStyle(color: Colors.white38, fontSize: 10)),
         ],
       ),
     );
   }
 
-  Widget _buildConnectButton() {
+  Widget _actionButton(String label, VoidCallback func, Color col) {
     return Padding(
       padding: const EdgeInsets.all(20),
       child: ElevatedButton(
-        onPressed: () {
-          if (!isConnected) startStreaming();
-          setState(() => isConnected = !isConnected);
-        },
+        onPressed: func,
         style: ElevatedButton.styleFrom(
-          backgroundColor: isConnected ? Colors.red : Colors.orange,
-          minimumSize: const Size(double.infinity, 55),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          backgroundColor: col, minimumSize: const Size(double.infinity, 55),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         ),
-        child: Text(isConnected ? "DISCONNECT" : "CONNECT ECU", style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+        child: Text(label, style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+      ),
+    );
+  }
+
+  void _showClearDTCDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.grey[900],
+        title: const Text("HAPUS DTC?"),
+        content: const Text("Pastikan mesin mati tapi kontak ON."),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("BATAL")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () {
+              Navigator.pop(context);
+              _showSimpleSnackBar("Perintah Mode 04 Berhasil!");
+            },
+            child: const Text("RESET"),
+          ),
+        ],
       ),
     );
   }
