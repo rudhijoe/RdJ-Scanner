@@ -1,100 +1,54 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-void main() {
-  runApp(const RdJScannerApp());
-}
+void main() => runApp(const RdJScannerApp());
 
 class RdJScannerApp extends StatelessWidget {
   const RdJScannerApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'RdJ Scanner Pro',
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        primarySwatch: Colors.orange,
-        textTheme: GoogleFonts.orbitronTextTheme(Theme.of(context).textTheme),
-      ),
-      home: const ScannerHomePage(),
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(brightness: Brightness.dark, primaryColor: Colors.orange,
+      textTheme: GoogleFonts.orbitronTextTheme(Theme.of(context).textTheme)),
+      home: const PermissionCheckPage(),
     );
   }
 }
 
+// --- DASHBOARD UTAMA ---
 class ScannerHomePage extends StatefulWidget {
   const ScannerHomePage({super.key});
-
   @override
   State<ScannerHomePage> createState() => _ScannerHomePageState();
 }
 
 class _ScannerHomePageState extends State<ScannerHomePage> {
-  List<ScanResult> scanResults = [];
-  bool isScanning = false;
-  BluetoothDevice? connectedDevice;
-  String afrValue = "0.0";
-  StreamSubscription? scanSubscription;
+  // Variabel Data Sensor
+  Map<String, String> sensors = {
+    "AFR": "14.7",
+    "INJECTOR": "2.20",
+    "IGNITION": "10.0",
+    "MAP (TB)": "30.0",
+    "CKP (RPM)": "1500",
+    "CRANKCASE": "101.3",
+  };
+  
+  bool isConnected = false;
 
-  @override
-  void initState() {
-    super.initState();
-    requestPermissions();
-  }
-
-  // Minta Izin Bluetooth & Lokasi (Wajib untuk Android 12+)
-  void requestPermissions() async {
-    await [
-      Permission.bluetoothScan,
-      Permission.bluetoothConnect,
-      Permission.location,
-    ].request();
-  }
-
-  void startScan() async {
-    setState(() {
-      scanResults.clear();
-      isScanning = true;
-    });
-
-    // Mulai scan
-    await FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
-
-    // Dapatkan hasil scan
-    FlutterBluePlus.scanResults.listen((results) {
-      if (mounted) {
+  void simulateData() {
+    Timer.periodic(const Duration(milliseconds: 300), (timer) {
+      if (mounted && isConnected) {
         setState(() {
-          scanResults = results;
-        });
-      }
-    });
-
-    await Future.delayed(const Duration(seconds: 10));
-    if (mounted) setState(() => isScanning = false);
-  }
-
-  void connectToDevice(BluetoothDevice device) async {
-    try {
-      await device.connect();
-      setState(() => connectedDevice = device);
-      // Simulasi pembacaan data AFR dari ELM327
-      startDataSimulation();
-    } catch (e) {
-      debugPrint("Koneksi gagal: $e");
-    }
-  }
-
-  void startDataSimulation() {
-    // Di sini nanti tempat logika AT Commands OBD2
-    Timer.periodic(const Duration(milliseconds: 500), (timer) {
-      if (mounted) {
-        setState(() {
-          // Simulasi angka AFR bergerak antara 12.0 - 15.0
-          afrValue = (12 + (DateTime.now().millisecond / 333)).toStringAsFixed(1);
+          sensors["AFR"] = (13.5 + (DateTime.now().millisecond / 500)).toStringAsFixed(1);
+          sensors["INJECTOR"] = (2.10 + (DateTime.now().millisecond / 2000)).toStringAsFixed(2);
+          sensors["IGNITION"] = (8.0 + (DateTime.now().millisecond / 100)).toStringAsFixed(1);
+          sensors["MAP (TB)"] = (28 + (DateTime.now().millisecond / 100)).toStringAsFixed(1);
+          sensors["CKP (RPM)"] = (1450 + (DateTime.now().millisecond % 100)).toString();
+          sensors["CRANKCASE"] = (100 + (DateTime.now().millisecond / 1000)).toStringAsFixed(1);
         });
       }
     });
@@ -103,61 +57,84 @@ class _ScannerHomePageState extends State<ScannerHomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.black,
       appBar: AppBar(
-        title: const Text('RdJ SCANNER PRO'),
-        centerTitle: true,
-        backgroundColor: Colors.black,
+        title: const Text("RdJ PRO SCANNER", style: TextStyle(fontSize: 18)),
+        centerTitle: true, backgroundColor: Colors.black,
       ),
       body: Column(
         children: [
-          // Display AFR Utama
-          Container(
-            height: 200,
-            width: double.infinity,
-            margin: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.black,
-              border: Border.all(color: Colors.orange, width: 3),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+          Expanded(
+            child: GridView.count(
+              padding: const EdgeInsets.all(10),
+              crossAxisCount: 2,
+              childAspectRatio: 1.2,
+              mainAxisSpacing: 10,
+              crossAxisSpacing: 10,
               children: [
-                const Text("AIR FUEL RATIO", style: TextStyle(color: Colors.white, fontSize: 18)),
-                Text(
-                  afrValue,
-                  style: const TextStyle(color: Colors.orange, fontSize: 80, fontWeight: FontWeight.bold),
-                ),
-                Text(
-                  connectedDevice == null ? "DISCONNECTED" : "CONNECTED: ${connectedDevice!.platformName}",
-                  style: TextStyle(color: connectedDevice == null ? Colors.red : Colors.green),
-                ),
+                _sensorTile("AIR FUEL", sensors["AFR"]!, "AFR", Colors.orange),
+                _sensorTile("INJECTOR", sensors["INJECTOR"]!, "ms", Colors.blueAccent),
+                _sensorTile("IGNITION", sensors["IGNITION"]!, "°", Colors.greenAccent),
+                _sensorTile("THROTTLE PRESS", sensors["MAP (TB)"]!, "kPa", Colors.redAccent),
+                _sensorTile("CKP SENSOR", sensors["CKP (RPM)"]!, "RPM", Colors.purpleAccent),
+                _sensorTile("CRANKCASE", sensors["CRANKCASE"]! , "kPa", Colors.yellowAccent),
               ],
             ),
           ),
-          
-          ElevatedButton(
-            onPressed: isScanning ? null : startScan,
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
-            child: Text(isScanning ? "SCANNING..." : "SCAN DEVICE"),
-          ),
-
-          Expanded(
-            child: ListView.builder(
-              itemCount: scanResults.length,
-              itemBuilder: (context, index) {
-                final r = scanResults[index];
-                return ListTile(
-                  title: Text(r.device.platformName.isEmpty ? "Unknown Device" : r.device.platformName),
-                  subtitle: Text(r.device.remoteId.toString()),
-                  trailing: const Icon(Icons.bluetooth, color: Colors.blue),
-                  onTap: () => connectToDevice(r.device),
-                );
-              },
-            ),
-          ),
+          _buildConnectButton(),
         ],
       ),
     );
   }
+
+  Widget _sensorTile(String label, String value, String unit, Color color) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A1A),
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(label, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 5),
+          Text(value, style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
+          Text(unit, style: const TextStyle(color: Colors.white38, fontSize: 10)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConnectButton() {
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: ElevatedButton(
+        onPressed: () {
+          if (!isConnected) simulateData();
+          setState(() => isConnected = !isConnected);
+        },
+        style: ElevatedButton.styleFrom(
+          backgroundColor: isConnected ? Colors.red : Colors.orange,
+          minimumSize: const Size(double.infinity, 50),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
+        ),
+        child: Text(isConnected ? "STOP SCAN" : "START SCAN"),
+      ),
+    );
+  }
+}
+
+// --- PERMISSION PAGE (Tetap seperti sebelumnya) ---
+class PermissionCheckPage extends StatefulWidget {
+  const PermissionCheckPage({super.key});
+  @override State<PermissionCheckPage> createState() => _PermissionCheckPageState();
+}
+class _PermissionCheckPageState extends State<PermissionCheckPage> {
+  @override void initState() { super.initState(); checkPermissions(); }
+  void checkPermissions() async {
+    await [Permission.bluetoothScan, Permission.bluetoothConnect, Permission.location].request();
+    if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const ScannerHomePage()));
+  }
+  @override Widget build(BuildContext context) => const Scaffold(body: Center(child: CircularProgressIndicator(color: Colors.orange)));
 }
