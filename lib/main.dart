@@ -1,4 +1,3 @@
-
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -17,14 +16,9 @@ class RdJScannerFinal extends StatefulWidget {
 }
 
 class _RdJScannerFinalState extends State<RdJScannerFinal> {
-  // --- 7 SENSOR POKOK (REAL DATA) ---
-  int rpm = 0;
-  double volt = 0.0;
-  int eot = 0;
-  double tps = 0.0;
-  int map = 0;
-  double inj = 0.0;
-  double afr = 14.7;
+  // 7 SENSOR POKOK
+  int rpm = 0; double volt = 0.0; int eot = 0;
+  double tps = 0.0; int map = 0; double inj = 0.0; double afr = 14.7;
 
   BluetoothDevice? targetDevice;
   BluetoothCharacteristic? targetChar;
@@ -37,14 +31,13 @@ class _RdJScannerFinalState extends State<RdJScannerFinal> {
     _initScanner();
   }
 
-  // 1. MINTA IZIN & SCAN BLUETOOTH
   void _initScanner() async {
     await [Permission.bluetoothScan, Permission.bluetoothConnect, Permission.location].request();
-
     FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
     FlutterBluePlus.scanResults.listen((results) async {
       for (ScanResult r in results) {
-        if (r.device.platformName.contains("OBD") || r.device.platformName.contains("ELM327")) {
+        // Penyesuaian: Menggunakan platformName atau remoteId
+        if (r.device.platformName.contains("OBD") || r.device.platformName.contains("ELM")) {
           FlutterBluePlus.stopScan();
           _connectToDevice(r.device);
           break;
@@ -53,7 +46,6 @@ class _RdJScannerFinalState extends State<RdJScannerFinal> {
     });
   }
 
-  // 2. KONEKSI KE ECU
   void _connectToDevice(BluetoothDevice device) async {
     try {
       await device.connect();
@@ -76,49 +68,43 @@ class _RdJScannerFinalState extends State<RdJScannerFinal> {
     }
   }
 
-  // 3. LOOP REQUEST DATA (Setiap 300ms tanya ECU)
   void _startQueryLoop() {
-    Timer.periodic(const Duration(milliseconds: 300), (t) async {
+    Timer.periodic(const Duration(milliseconds: 350), (t) async {
       if (!isConnected || targetChar == null) return;
-      
-      // Kirim perintah secara berurutan
-      await _sendCommand("010C\r"); // Tanya RPM
-      await Future.delayed(const Duration(milliseconds: 50));
-      await _sendCommand("0105\r"); // Tanya EOT (Suhu)
-      await Future.delayed(const Duration(milliseconds: 50));
-      await _sendCommand("0111\r"); // Tanya TPS
+      await _sendCommand("010C\r"); // RPM
+      await Future.delayed(const Duration(milliseconds: 60));
+      await _sendCommand("0105\r"); // EOT
+      await Future.delayed(const Duration(milliseconds: 60));
+      await _sendCommand("0111\r"); // TPS
     });
   }
 
+  // PERBAIKAN: Parameter 'obedience' dihapus untuk versi Flutter Blue Plus terbaru
   Future<void> _sendCommand(String cmd) async {
-    await targetChar!.write(utf8.encode(cmd), obedience: false);
+    if (targetChar != null) {
+      await targetChar!.write(utf8.encode(cmd), withoutResponse: true);
+    }
   }
 
-  // 4. TERJEMAHKAN BALASAN ECU (PARSING)
   void _startListening() async {
     await targetChar!.setNotifyValue(true);
     targetChar!.lastValueStream.listen((data) {
+      if (data.isEmpty) return;
       String response = utf8.decode(data).trim();
       
-      // Rumus konversi standard OBD2
-      if (response.contains("41 0C")) { // Respon RPM
+      if (response.contains("41 0C")) {
         List<String> p = response.split(" ");
         if (p.length >= 4) {
           int a = int.parse(p[2], radix: 16);
           int b = int.parse(p[3], radix: 16);
           setState(() => rpm = ((a * 256) + b) ~/ 4);
         }
-      } else if (response.contains("41 05")) { // Respon EOT
+      } else if (response.contains("41 05")) {
         int a = int.parse(response.split(" ")[2], radix: 16);
         setState(() => eot = a - 40);
       }
     });
   }
-
-  // --- 3 AKSI RISET REAL ---
-  void _resetEcu() => _sendCommand("ATZ\r");
-  void _clearDTC() => _sendCommand("04\r");
-  void _resetTPS() => _sendCommand("0100\r"); // Perintah menyesuaikan protokol motor
 
   @override
   Widget build(BuildContext context) {
@@ -130,10 +116,7 @@ class _RdJScannerFinalState extends State<RdJScannerFinal> {
       ),
       body: Column(
         children: [
-          // Display RPM Utama
           _buildBigDisplay("RPM", "$rpm", "ENGINE SPEED"),
-          
-          // Grid 6 Sensor Lainnya
           Expanded(
             child: GridView.count(
               crossAxisCount: 2,
@@ -149,17 +132,15 @@ class _RdJScannerFinalState extends State<RdJScannerFinal> {
               ],
             ),
           ),
-          
-          // Panel Riset/Aksi
           Container(
             padding: const EdgeInsets.all(15),
             decoration: BoxDecoration(color: Colors.grey[900], borderRadius: const BorderRadius.vertical(top: Radius.circular(20))),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                _actionBtn("RISET TPS", _resetTPS, Colors.orange),
-                _actionBtn("RISET ECU", _resetEcu, Colors.blue),
-                _actionBtn("HAPUS DTC", _clearDTC, Colors.red),
+                _actionBtn("RISET TPS", () => _sendCommand("AT RESET TPS\r"), Colors.orange),
+                _actionBtn("RISET ECU", () => _sendCommand("ATZ\r"), Colors.blue),
+                _actionBtn("HAPUS DTC", () => _sendCommand("04\r"), Colors.red),
               ],
             ),
           )
@@ -172,10 +153,10 @@ class _RdJScannerFinalState extends State<RdJScannerFinal> {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(vertical: 30),
-      decoration: BoxDecoration(color: Colors.red[900]!.withOpacity(0.1)),
+      color: Colors.red[900]!.withOpacity(0.1),
       child: Column(children: [
         Text(label, style: const TextStyle(color: Colors.white54)),
-        Text(value, style: const TextStyle(fontSize: 80, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+        Text(value, style: const TextStyle(fontSize: 80, fontWeight: FontWeight.bold)),
         Text(desc, style: const TextStyle(color: Colors.red, fontSize: 10)),
       ]),
     );
