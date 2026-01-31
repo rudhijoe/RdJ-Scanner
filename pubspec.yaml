@@ -8,17 +8,15 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  # Alat untuk koneksi ke ELM327
-  flutter_blue_plus: ^1.31.0
-  # Alat untuk meminta izin Bluetooth di HP
-  permission_handler: ^11.0.0
-  # Untuk mengubah kode HEX motor menjadi teks
-  convert: ^3.1.1
+  # Versi ini stabil dan cocok dengan kodingan main.dart terakhir
+  flutter_blue_plus: 1.31.0
+  permission_handler: 11.3.1
+  convert: 3.1.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^3.0.0
+  flutter_lints: 3.0.0
 
 flutter:
   uses-material-design: true
