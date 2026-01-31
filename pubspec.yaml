@@ -1,5 +1,24 @@
+name: rdj_scanner
+description: RdJ Scanner Pro Real Data Version
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
 dependencies:
   flutter:
     sdk: flutter
-  flutter_blue_plus: ^1.31.0  # Library utama Bluetooth
-  permission_handler: ^11.0.0 # Untuk meminta izin akses di HP
+  # Alat untuk koneksi ke ELM327
+  flutter_blue_plus: ^1.31.0
+  # Alat untuk meminta izin Bluetooth di HP
+  permission_handler: ^11.0.0
+  # Untuk mengubah kode HEX motor menjadi teks
+  convert: ^3.1.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
