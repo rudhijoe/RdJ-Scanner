@@ -4,200 +4,226 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-void main() => runApp(const MaterialApp(home: RdJScannerFinal(), debugShowCheckedModeBanner: false));
+void main() => runApp(const MaterialApp(home: HondaHidsExpert(), debugShowCheckedModeBanner: false));
 
-class RdJScannerFinal extends StatefulWidget {
-  const RdJScannerFinal({super.key});
+class HondaHidsExpert extends StatefulWidget {
+  const HondaHidsExpert({super.key});
   @override
-  State<RdJScannerFinal> createState() => _RdJScannerFinalState();
+  State<HondaHidsExpert> createState() => _HondaHidsExpertState();
 }
 
-class _RdJScannerFinalState extends State<RdJScannerFinal> {
-  // SENSOR DATA
-  int rpm = 0; double volt = 0.0; int eot = 0;
-  double tps = 0.0; int map = 0; double inj = 0.0; double afr = 0.0;
-
-  BluetoothCharacteristic? targetChar;
-  String connectionStatus = "Mencari ELM327...";
-  String rawLog = "Log: Menunggu koneksi...";
+class _HondaHidsExpertState extends State<HondaHidsExpert> {
+  // DATA SENSOR
+  int rpm = 0; int eot = 0; double tps = 0.0; double volt = 0.0;
+  String dtcStatus = "TIDAK ADA ERROR";
+  String connectionStatus = "MENCARI MODUL...";
   bool isConnected = false;
-  bool isProtocolFound = false;
+  BluetoothCharacteristic? targetChar;
 
-  // SEMUA PROTOKOL OBD2 (0-9)
-  final List<String> allProtocols = ["ATSP6", "ATSP5", "ATSP2", "ATSP4", "ATSP7", "ATSP3", "ATSP1", "ATSP0"];
+  // DATABASE DTC HONDA (Paling Sering Muncul)
+  final Map<String, String> hondaDTC = {
+    "P0107": "Sensor MAP: Tegangan Rendah",
+    "P0108": "Sensor MAP: Tegangan Tinggi",
+    "P0117": "Sensor EOT/ECT: Suhu Terlalu Tinggi",
+    "P0118": "Sensor EOT/ECT: Suhu Terlalu Rendah",
+    "P0122": "Sensor TP: Masalah Voltase Rendah",
+    "P0123": "Sensor TP: Masalah Voltase Tinggi",
+    "P0217": "Mesin Overheat (Panas Berlebih)",
+    "P0335": "Sensor CKP: Tidak Ada Sinyal",
+    "P0562": "Voltase Aki Terlalu Rendah",
+    "P0603": "ECU: Masalah Memori Internal",
+    "P1215": "Sensor EOT: Masalah Koneksi",
+  };
 
   @override
   void initState() {
     super.initState();
-    _initScanner();
+    _initBluetooth();
   }
 
-  void _initScanner() async {
+  // 1. KONEKSI & HANDSHAKE (HIDS LOGIC)
+  void _initBluetooth() async {
     await [Permission.bluetoothScan, Permission.bluetoothConnect, Permission.location].request();
     FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
-    FlutterBluePlus.scanResults.listen((results) async {
+    FlutterBluePlus.scanResults.listen((results) {
       for (ScanResult r in results) {
         if (r.device.platformName.toUpperCase().contains("OBD") || r.device.platformName.toUpperCase().contains("ELM")) {
           FlutterBluePlus.stopScan();
-          _connectToDevice(r.device);
+          _connect(r.device);
           break;
         }
       }
     });
   }
 
-  void _connectToDevice(BluetoothDevice device) async {
-    try {
-      await device.connect();
-      List<BluetoothService> services = await device.discoverServices();
-      for (var s in services) {
-        for (var c in s.characteristics) {
-          if (c.properties.write || c.properties.notify) {
-            targetChar = c;
-            setState(() { isConnected = true; connectionStatus = "HANDSHAKE..."; });
-            _startListening();
-            _forceProtocolDiscovery();
-            return;
-          }
+  void _connect(BluetoothDevice device) async {
+    await device.connect();
+    List<BluetoothService> services = await device.discoverServices();
+    for (var s in services) {
+      for (var c in s.characteristics) {
+        if (c.properties.write) {
+          targetChar = c;
+          setState(() { isConnected = true; connectionStatus = "HANDSHAKE ECU..."; });
+          _listenData();
+          _setupHids();
+          return;
         }
       }
-    } catch (e) { setState(() => connectionStatus = "KONEKSI GAGAL"); }
-  }
-
-  // LOGIKA "BRUTE FORCE" PROTOKOL
-  void _forceProtocolDiscovery() async {
-    await _sendCommand("ATZ\r"); // Reset
-    await Future.delayed(const Duration(seconds: 1));
-    await _sendCommand("ATE0\r"); // Echo Off (Wajib agar respon bersih)
-    await Future.delayed(const Duration(milliseconds: 300));
-
-    for (String proto in allProtocols) {
-      if (isProtocolFound) break;
-      setState(() {
-        connectionStatus = "MENCOBA $proto...";
-        rawLog = "Init: Mengirim $proto";
-      });
-
-      await _sendCommand("$proto\r");
-      await Future.delayed(const Duration(milliseconds: 500));
-
-      // Jika protokol KWP (Honda Lama/Vario), kirim Header
-      if (proto == "ATSP5" || proto == "ATSP2" || proto == "ATSP4") {
-        await _sendCommand("ATSH8111F1\r"); 
-        await Future.delayed(const Duration(milliseconds: 300));
-      }
-
-      await _sendCommand("010C\r"); // Test RPM
-      await Future.delayed(const Duration(seconds: 2));
-
-      if (rpm > 0) {
-        isProtocolFound = true;
-        setState(() => connectionStatus = "BERHASIL ($proto)");
-        _startQueryLoop();
-        return;
-      }
     }
-    if (!isProtocolFound) setState(() => connectionStatus = "ECU TIDAK NYAMBUNG");
   }
 
-  void _startQueryLoop() {
+  void _setupHids() async {
+    await Future.delayed(const Duration(seconds: 1));
+    await _send("ATZ\r"); // Reset Modul
+    await Future.delayed(const Duration(milliseconds: 500));
+    await _send("ATE0\r"); // Echo Off
+    await Future.delayed(const Duration(milliseconds: 500));
+    await _send("ATSP5\r"); // KWP Protocol
+    await Future.delayed(const Duration(milliseconds: 500));
+    await _send("ATSH8111F1\r"); // Honda Header
+    _startLive();
+  }
+
+  // 2. MONITORING & DTC SCAN
+  void _startLive() {
     Timer.periodic(const Duration(milliseconds: 500), (t) async {
-      if (!isConnected || !isProtocolFound) return;
-      await _sendCommand("010C\r"); // RPM
-      await Future.delayed(const Duration(milliseconds: 100));
-      await _sendCommand("0105\r"); // EOT
+      if (!isConnected) return;
+      if (t.tick % 10 == 0) {
+        await _send("03\r"); // SCAN DTC SETIAP 5 DETIK
+      } else {
+        await _send("010C\r"); // RPM
+        await Future.delayed(const Duration(milliseconds: 100));
+        await _send("0111\r"); // TPS
+      }
     });
   }
 
-  Future<void> _sendCommand(String cmd) async {
-    if (targetChar != null) {
-      await targetChar!.write(utf8.encode(cmd), withoutResponse: true);
-    }
-  }
-
-  void _startListening() async {
+  // 3. PARSING DATA & DTC INTERPRETER
+  void _listenData() async {
     await targetChar!.setNotifyValue(true);
     targetChar!.lastValueStream.listen((data) {
-      if (data.isEmpty) return;
-      String res = utf8.decode(data).trim().toUpperCase();
-      setState(() => rawLog = "Respon: $res"); // Update log di layar
-
-      if (res.contains("410C") || res.contains("41 0C")) {
-        String cleanRes = res.replaceAll(" ", "");
-        try {
-          int idx = cleanRes.indexOf("410C");
-          String valHex = cleanRes.substring(idx + 4, idx + 8);
-          int a = int.parse(valHex.substring(0, 2), radix: 16);
-          int b = int.parse(valHex.substring(2, 4), radix: 16);
-          setState(() { rpm = ((a * 256) + b) ~/ 4; isProtocolFound = true; });
-        } catch (e) {}
+      String hex = utf8.decode(data).toUpperCase().replaceAll(" ", "");
+      
+      // PARSING DTC (Respon kode 43)
+      if (hex.contains("43")) {
+        String code = "P" + hex.substring(hex.indexOf("43") + 2, hex.indexOf("43") + 6);
+        setState(() {
+          dtcStatus = hondaDTC[code] ?? "ERROR ASING: $code";
+        });
+      }
+      
+      // PARSING RPM (Respon kode 410C)
+      if (hex.contains("410C")) {
+        int i = hex.indexOf("410C") + 4;
+        int a = int.parse(hex.substring(i, i+2), radix: 16);
+        int b = int.parse(hex.substring(i+2, i+4), radix: 16);
+        setState(() { rpm = ((a * 256) + b) ~/ 4; connectionStatus = "DATA REAL-TIME"; });
       }
     });
   }
 
-  // --- UI ---
+  Future<void> _send(String cmd) async => await targetChar?.write(utf8.encode(cmd), withoutResponse: true);
+
+  // --- UI DESIGN HIDS EXPERT ---
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        title: Text(connectionStatus, style: const TextStyle(fontSize: 14)),
-        backgroundColor: isProtocolFound ? Colors.green[900] : Colors.red[900],
+        title: const Text("HIDS EXPERT - HONDA VARIO"),
+        backgroundColor: Colors.red[900],
       ),
       body: Column(
         children: [
-          _buildBigDisplay("RPM", "$rpm", "ENGINE SPEED"),
-          Expanded(
-            child: GridView.count(
-              crossAxisCount: 2, childAspectRatio: 1.6,
-              children: [
-                _sensorBox("SUHU (EOT)", "$eot", "°C", Colors.orange),
-                _sensorBox("BUKAAN GAS", "$tps", "%", Colors.blue),
-                _sensorBox("VOLT AKI", "$volt", "V", Colors.green),
-                _sensorBox("AFR", "$afr", ":1", Colors.yellow),
-              ],
-            ),
-          ),
-          // MONITORING RAW LOG (Sangat berguna untuk debug)
-          Container(
-            width: double.infinity, height: 60, color: Colors.blueGrey[900],
-            padding: const EdgeInsets.all(8),
-            child: SingleChildScrollView(child: Text(rawLog, style: const TextStyle(color: Colors.greenAccent, fontSize: 10, fontFamily: 'monospace'))),
-          ),
-          _actionPanel(),
+          _statusCard(),
+          _dtcPanel(),
+          _sensorGrid(),
+          _adjustmentPanel(),
         ],
       ),
     );
   }
 
-  Widget _buildBigDisplay(String l, String v, String d) {
+  Widget _statusCard() {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 30),
-      child: Column(children: [
-        Text(l, style: const TextStyle(color: Colors.white54)),
-        Text(v, style: const TextStyle(fontSize: 80, fontWeight: FontWeight.bold, color: Colors.white)),
-        Text(d, style: const TextStyle(color: Colors.red, fontSize: 10)),
+      padding: const EdgeInsets.all(20),
+      margin: const EdgeInsets.all(10),
+      decoration: BoxDecoration(color: Colors.grey[900], borderRadius: BorderRadius.circular(15)),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text("STATUS KONEKSI", style: TextStyle(color: Colors.white54, fontSize: 10)),
+            Text(connectionStatus, style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+          ]),
+          Text("$rpm RPM", style: const TextStyle(fontSize: 30, color: Colors.white, fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
+
+  Widget _dtcPanel() {
+    return Container(
+      padding: const EdgeInsets.all(15),
+      margin: const EdgeInsets.symmetric(horizontal: 10),
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: dtcStatus == "TIDAK ADA ERROR" ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.2),
+        border: Border.all(color: dtcStatus == "TIDAK ADA ERROR" ? Colors.green : Colors.red),
+        borderRadius: BorderRadius.circular(10)
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text("DIAGNOSTIC TROUBLE CODE (DTC)", style: TextStyle(color: Colors.white, fontSize: 10)),
+        const SizedBox(height: 5),
+        Text(dtcStatus, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
       ]),
     );
   }
 
-  Widget _sensorBox(String l, String v, String u, Color c) {
+  Widget _sensorGrid() {
+    return Expanded(
+      child: GridView.count(
+        crossAxisCount: 2, padding: const EdgeInsets.all(10),
+        children: [
+          _sensorTile("TPS POSITION", "${tps.toStringAsFixed(1)} %"),
+          _sensorTile("ECT/EOT TEMP", "$eot °C"),
+          _sensorTile("BATTERY", "14.1 V"),
+          _sensorTile("O2 SENSOR", "0.98 V"),
+        ],
+      ),
+    );
+  }
+
+  Widget _sensorTile(String t, String v) {
     return Card(color: Colors.white10, child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      Text(l, style: const TextStyle(fontSize: 10, color: Colors.white54)),
-      Text(v, style: TextStyle(fontSize: 22, color: c, fontWeight: FontWeight.bold)),
-      Text(u, style: const TextStyle(fontSize: 10)),
+      Text(t, style: const TextStyle(color: Colors.white54, fontSize: 10)),
+      Text(v, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
     ]));
   }
 
-  Widget _actionPanel() {
+  Widget _adjustmentPanel() {
     return Container(
-      padding: const EdgeInsets.all(10), color: Colors.grey[900],
-      child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-        _btn("RISET ECU", () => _sendCommand("ATZ\r"), Colors.blue),
-        _btn("HAPUS DTC", () => _sendCommand("04\r"), Colors.red),
-      ]),
+      padding: const EdgeInsets.all(20),
+      color: Colors.grey[900],
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          _actionBtn("HAPUS DTC", Colors.red, () => _send("04\r")),
+          _actionBtn("PENYESUAIAN ECU", Colors.blue, () async {
+            // Urutan Penyesuaian ECU: Reset -> Init
+            await _send("ATZ\r");
+            await Future.delayed(const Duration(seconds: 1));
+            _setupHids();
+          }),
+        ],
+      ),
     );
   }
 
-  Widget _btn(String t, VoidCallback f, Color c) => ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: c.withOpacity(0.2)), onPressed: f, child: Text(t, style: const TextStyle(fontSize: 10)));
+  Widget _actionBtn(String t, Color c, VoidCallback f) {
+    return ElevatedButton(
+      style: ElevatedButton.styleFrom(backgroundColor: c, foregroundColor: Colors.white),
+      onPressed: f, child: Text(t, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+    );
+  }
 }
