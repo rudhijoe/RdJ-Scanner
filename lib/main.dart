@@ -4,178 +4,226 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-void main() => runApp(const MaterialApp(home: YamahaDiagExpert(), debugShowCheckedModeBanner: false));
+void main() => runApp(const MaterialApp(
+      home: UltimateScanner(),
+      debugShowCheckedModeBanner: false,
+    ));
 
-class YamahaDiagExpert extends StatefulWidget {
-  const YamahaDiagExpert({super.key});
+class UltimateScanner extends StatefulWidget {
+  const UltimateScanner({super.key});
   @override
-  State<YamahaDiagExpert> createState() => _YamahaDiagExpertState();
+  State<UltimateScanner> createState() => _UltimateScannerState();
 }
 
-class _YamahaDiagExpertState extends State<YamahaDiagExpert> {
-  // DATA SENSOR
+class _UltimateScannerState extends State<UltimateScanner> {
+  // --- STATE SENSOR (7 SENSOR + RPM) ---
   int rpm = 0; int temp = 0; double tps = 0.0; double volt = 0.0;
-  String dtcStatus = "SISTEM NORMAL";
-  String connectionStatus = "MENCARI YAMAHA...";
+  double map = 0.0; double o2 = 0.0; double inj = 0.0;
+  
+  String connectionStatus = "SIAP SCANNING";
+  String dtcStatus = "STB";
+  String selectedBrand = "HONDA"; 
   bool isConnected = false;
   BluetoothCharacteristic? targetChar;
 
-  // DATABASE DTC YAMAHA (Format P-Code)
-  final Map<String, String> yamahaDTC = {
-    "P0335": "12: Sensor Crankshaft (CKP) Bermasalah",
-    "P0105": "13: Sensor Tekanan Udara (MAP) Bermasalah",
-    "P0110": "14: Sensor Suhu Udara (IAT) Bermasalah",
-    "P0115": "15: Sensor Suhu Mesin (Coolant/EOT) Bermasalah",
-    "P0120": "21: Sensor Posisi Gas (TPS) Bermasalah",
-    "P0500": "42: Sensor Kecepatan Roda Depan Bermasalah",
-  };
-
-  @override
-  void initState() {
-    super.initState();
-    _startScan();
-  }
-
-  // 1. KONEKSI STABIL YAMAHA
-  void _startScan() async {
+  // --- 1. KONEKSI & DISCOVERY ---
+  void _initScan() async {
     await [Permission.bluetoothScan, Permission.bluetoothConnect, Permission.location].request();
-    FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
+    setState(() => connectionStatus = "MENCARI PERANGKAT...");
+    
+    FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
     FlutterBluePlus.scanResults.listen((results) {
       for (ScanResult r in results) {
-        if (r.device.platformName.toUpperCase().contains("OBD") || r.device.platformName.toUpperCase().contains("ELM")) {
+        if (r.device.platformName.toUpperCase().contains("OBD") || 
+            r.device.platformName.toUpperCase().contains("ELM")) {
           FlutterBluePlus.stopScan();
-          _connectToYamaha(r.device);
+          _connectDevice(r.device);
           break;
         }
       }
     });
   }
 
-  void _connectToYamaha(BluetoothDevice device) async {
-    await device.connect(autoConnect: false);
-    List<BluetoothService> services = await device.discoverServices();
-    for (var s in services) {
-      for (var c in s.characteristics) {
-        if (c.properties.write) {
-          targetChar = c;
-          setState(() { isConnected = true; connectionStatus = "HANDSHAKE YAMAHA..."; });
-          _listenToYamaha();
-          _initYamahaProtocol();
-          return;
+  void _connectDevice(BluetoothDevice device) async {
+    try {
+      await device.connect();
+      List<BluetoothService> services = await device.discoverServices();
+      for (var s in services) {
+        for (var c in s.characteristics) {
+          if (c.properties.write) {
+            targetChar = c;
+            _setupECU();
+            return;
+          }
         }
       }
-    }
+    } catch (e) { setState(() => connectionStatus = "GAGAL KONEK"); }
   }
 
-  // 2. YAMAHA K-LINE INITIALIZATION
-  void _initYamahaProtocol() async {
-    await Future.delayed(const Duration(seconds: 1));
-    await _send("ATZ\r");       // Reset
-    await Future.delayed(const Duration(milliseconds: 800));
-    await _send("ATE0\r");      // Echo Off
-    await Future.delayed(const Duration(milliseconds: 400));
-    await _send("ATSP5\r");     // Protokol KWP (Yamaha Indonesia)
-    await Future.delayed(const Duration(milliseconds: 400));
-    await _send("ATSH\r");      // Reset Header ke Default (Yamaha tdk pakai Header Honda)
+  // --- 2. PENYESUAIAN ECU & PROTOKOL ---
+  void _setupECU() async {
+    setState(() => connectionStatus = "KONFIGURASI ECU...");
+    _listenData();
     
-    _runQueryLoop();
+    // Prosedur Penyesuaian: Reset -> Echo Off -> Set Protokol
+    await _send("ATZ\r"); 
+    await Future.delayed(const Duration(milliseconds: 1000));
+    await _send("ATE0\r"); 
+    await Future.delayed(const Duration(milliseconds: 400));
+    await _send("ATSP5\r"); 
+    await Future.delayed(const Duration(milliseconds: 400));
+
+    if (selectedBrand == "HONDA") {
+      await _send("ATSH8111F1\r"); // Header khusus Honda
+    } else {
+      await _send("ATSH\r"); // Reset Header untuk Yamaha
+    }
+    
+    setState(() { isConnected = true; connectionStatus = "ONLINE ($selectedBrand)"; });
+    _startLiveQuery();
   }
 
-  // 3. POLLING DATA (Real-Time)
-  void _runQueryLoop() {
-    Timer.periodic(const Duration(milliseconds: 400), (t) async {
+  // --- 3. LIVE QUERY (7 SENSOR SEQUENTIAL) ---
+  void _startLiveQuery() {
+    Timer.periodic(const Duration(milliseconds: 250), (t) async {
       if (!isConnected) return;
-      // Yamaha lebih stabil jika data diminta satu per satu
-      if (t.tick % 5 == 0) {
-        await _send("03\r"); // Cek DTC setiap 2 detik
-      } else {
-        await _send("010C\r"); // Minta RPM
-        await Future.delayed(const Duration(milliseconds: 100));
-        await _send("0105\r"); // Minta Suhu Mesin
+      int step = t.tick % 8;
+      switch (step) {
+        case 0: await _send("010C\r"); break; // RPM
+        case 1: await _send("0111\r"); break; // TPS
+        case 2: await _send("0105\r"); break; // Suhu
+        case 3: await _send("010B\r"); break; // MAP
+        case 4: await _send("0114\r"); break; // O2
+        case 5: await _send("015E\r"); break; // Fuel Rate (Inj)
+        case 6: await _send("0142\r"); break; // Voltase Aki
+        case 7: await _send("03\r");   break; // DTC
       }
     });
   }
 
-  // 4. PARSING YAMAHA DATA
-  void _listenToYamaha() async {
+  // --- 4. SMART PARSING ENGINE ---
+  void _listenData() async {
     await targetChar!.setNotifyValue(true);
     targetChar!.lastValueStream.listen((data) {
       String hex = utf8.decode(data).toUpperCase().replaceAll(" ", "");
-      
-      if (hex.contains("410C")) { // RPM Logic
-        try {
+      try {
+        if (hex.contains("410C")) { // RPM
           int i = hex.indexOf("410C") + 4;
           int a = int.parse(hex.substring(i, i+2), radix: 16);
           int b = int.parse(hex.substring(i+2, i+4), radix: 16);
-          setState(() { rpm = ((a * 256) + b) ~/ 4; connectionStatus = "YAMAHA CONNECTED"; });
-        } catch (e) {}
-      } 
-      else if (hex.contains("4105")) { // Temp Logic
-        try {
-          int i = hex.indexOf("4105") + 4;
-          int a = int.parse(hex.substring(i, i+2), radix: 16);
+          setState(() => rpm = ((a * 256) + b) ~/ 4);
+        } else if (hex.contains("4111")) { // TPS
+          int a = int.parse(hex.substring(hex.indexOf("4111")+4, hex.indexOf("4111")+6), radix: 16);
+          setState(() => tps = (a * 100) / 255);
+        } else if (hex.contains("4105")) { // Temp
+          int a = int.parse(hex.substring(hex.indexOf("4105")+4, hex.indexOf("4105")+6), radix: 16);
           setState(() => temp = a - 40);
-        } catch (e) {}
-      }
-      else if (hex.contains("43")) { // DTC Logic (Yamaha P-Codes)
-        try {
-          String code = "P" + hex.substring(hex.indexOf("43") + 2, hex.indexOf("43") + 6);
-          setState(() => dtcStatus = yamahaDTC[code] ?? "ERROR: $code");
-        } catch (e) {}
-      }
+        } else if (hex.contains("410B")) { // MAP
+          int a = int.parse(hex.substring(hex.indexOf("410B")+4, hex.indexOf("410B")+6), radix: 16);
+          setState(() => map = a.toDouble());
+        } else if (hex.contains("4114")) { // O2
+          int a = int.parse(hex.substring(hex.indexOf("4114")+4, hex.indexOf("4114")+6), radix: 16);
+          setState(() => o2 = a / 200);
+        } else if (hex.contains("415E")) { // Injektor
+          int a = int.parse(hex.substring(hex.indexOf("415E")+4, hex.indexOf("415E")+6), radix: 16);
+          int b = int.parse(hex.substring(hex.indexOf("415E")+6, hex.indexOf("415E")+8), radix: 16);
+          setState(() => inj = ((a * 256) + b) / 3215);
+        } else if (hex.contains("4142")) { // Voltage
+          int a = int.parse(hex.substring(hex.indexOf("4142")+4, hex.indexOf("4142")+6), radix: 16);
+          int b = int.parse(hex.substring(hex.indexOf("4142")+6, hex.indexOf("4142")+8), radix: 16);
+          setState(() => volt = ((a * 256) + b) / 1000);
+        } else if (hex.contains("43")) { // DTC
+          setState(() => dtcStatus = hex.contains("4300") ? "NORMAL" : "ERROR!");
+        }
+      } catch (e) {}
     });
   }
 
   Future<void> _send(String cmd) async => await targetChar?.write(utf8.encode(cmd), withoutResponse: true);
 
-  // --- UI DESIGN YAMAHA BLUE CORE ---
+  // --- 5. UI MODERN DASHBOARD ---
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF001F3F), // Yamaha Deep Blue
-      appBar: AppBar(title: const Text("YAMAHA DIAGNOSTIC TOOL"), backgroundColor: const Color(0xFF0044CC)),
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        title: const Text("RDJ ULTIMATE SCANNER", style: TextStyle(fontSize: 14, letterSpacing: 1.5)),
+        backgroundColor: Colors.black,
+        actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: _initScan)],
+      ),
       body: Column(
         children: [
-          _statusBanner(),
-          _rpmDisplay(),
-          _dtcBox(),
-          _sensorGrid(),
-          _footerActions(),
+          _brandSelector(),
+          _heroRPM(),
+          Expanded(child: _gridSensors()),
+          _footerDTC(),
         ],
       ),
     );
   }
 
-  Widget _statusBanner() => Container(width: double.infinity, color: Colors.blueAccent, padding: const EdgeInsets.all(5), child: Text(connectionStatus, textAlign: TextAlign.center, style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold)));
+  Widget _brandSelector() {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+        _btnBrand("HONDA", Colors.red),
+        const SizedBox(width: 15),
+        _btnBrand("YAMAHA", Colors.blue),
+      ]),
+    );
+  }
 
-  Widget _rpmDisplay() => Container(padding: const EdgeInsets.symmetric(vertical: 40), child: Column(children: [
-    const Text("ENGINE SPEED", style: TextStyle(color: Colors.blueAccent)),
-    Text("$rpm", style: const TextStyle(fontSize: 100, fontWeight: FontWeight.bold, color: Colors.white)),
-    const Text("RPM", style: TextStyle(color: Colors.white54)),
-  ]));
+  Widget _btnBrand(String b, Color c) {
+    bool active = selectedBrand == b;
+    return GestureDetector(
+      onTap: () => setState(() => selectedBrand = b),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 25, vertical: 8),
+        decoration: BoxDecoration(color: active ? c : Colors.white10, borderRadius: BorderRadius.circular(15)),
+        child: Text(b, style: TextStyle(color: active ? Colors.white : Colors.white38, fontWeight: FontWeight.bold)),
+      ),
+    );
+  }
 
-  Widget _dtcBox() => Container(
-    margin: const EdgeInsets.symmetric(horizontal: 15), padding: const EdgeInsets.all(15),
-    decoration: BoxDecoration(color: dtcStatus == "SISTEM NORMAL" ? Colors.green[900] : Colors.red[900], borderRadius: BorderRadius.circular(10)),
-    child: Row(children: [
-      const Icon(Icons.warning_amber_rounded, color: Colors.white),
-      const SizedBox(width: 15),
-      Expanded(child: Text(dtcStatus, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
-    ]),
-  );
+  Widget _heroRPM() {
+    return Container(
+      height: 180,
+      alignment: Alignment.center,
+      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Text(connectionStatus, style: TextStyle(color: isConnected ? Colors.green : Colors.red, fontSize: 10)),
+        Text("$rpm", style: const TextStyle(fontSize: 90, color: Colors.white, fontWeight: FontWeight.bold)),
+        const Text("RPM", style: TextStyle(color: Colors.white24, letterSpacing: 5)),
+      ]),
+    );
+  }
 
-  Widget _sensorGrid() => Expanded(child: GridView.count(crossAxisCount: 2, padding: const EdgeInsets.all(10), children: [
-    _tile("COOLANT TEMP", "$temp °C"),
-    _tile("BATTERY", "14.2 V"),
-  ]));
+  Widget _gridSensors() {
+    return GridView.count(
+      crossAxisCount: 2, padding: const EdgeInsets.symmetric(horizontal: 15),
+      childAspectRatio: 1.5, crossAxisSpacing: 10, mainAxisSpacing: 10,
+      children: [
+        _tile("GAS (TPS)", "${tps.toStringAsFixed(1)} %", Colors.blue),
+        _tile("SUHU", "$temp °C", Colors.orange),
+        _tile("TEKANAN MAP", "${map.toStringAsFixed(0)} kPa", Colors.purple),
+        _tile("O2 SENSOR", "${o2.toStringAsFixed(2)} V", Colors.green),
+        _tile("INJEKTOR", "${inj.toStringAsFixed(2)} ms", Colors.cyan),
+        _tile("AKI", "${volt.toStringAsFixed(1)} V", Colors.yellow),
+      ],
+    );
+  }
 
-  Widget _tile(String t, String v) => Card(color: Colors.white10, child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-    Text(t, style: const TextStyle(color: Colors.white54, fontSize: 10)),
-    Text(v, style: const TextStyle(color: Colors.blueAccent, fontSize: 24, fontWeight: FontWeight.bold)),
-  ]));
+  Widget _tile(String t, String v, Color c) {
+    return Container(
+      decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12), border: Border.all(color: c.withOpacity(0.1))),
+      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Text(t, style: const TextStyle(color: Colors.white38, fontSize: 9)),
+        Text(v, style: TextStyle(color: c, fontSize: 20, fontWeight: FontWeight.bold)),
+      ]),
+    );
+  }
 
-  Widget _footerActions() => Container(padding: const EdgeInsets.all(20), color: Colors.black26, child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-    ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.red), onPressed: () => _send("04\r"), child: const Text("RESET DTC")),
-    ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.blue), onPressed: () => _send("ATZ\r"), child: const Text("RESET MODULE")),
-  ]));
-}
+  Widget _footerDTC() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(color: Colors.grey[900], borderRadius: const BorderRadius.vertical(top: Radius.circular(25))),
+      child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children:
